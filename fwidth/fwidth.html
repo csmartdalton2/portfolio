@@ -1,0 +1,361 @@
+<link rel='stylesheet' type='text/css' href='../slide.css'></link>
+
+<style>
+pre {
+  margin-right:20px
+}
+</style>
+
+<div class="main">
+<h1><img src="../lightbulb.png" height="50px" style="margin-right:10px"></img>Manhattan Gradient Descent for Curves</h1>
+  <table width="100%"><tr>
+      <td width="100%">
+        <ul>
+          <li>For a flat edge we just needed to know how far away it was:</li>
+          <ul>
+            <li>Convert to implicit form and evaluate at pixel center:</li>
+            <ul><pre>f = A*x + B*y + C;</pre></ul>
+            <li>What is the Manhattan distance (in screen space) to the nearest <code>f=0</code>?</li>
+          </ul>
+          <li>For curves it's the same:</li>
+          <ul>
+            <li>Convert to implicit form and evaluate at pixel center:</li>
+              <ul><pre>f = x*x + y*y - 1;  <b>// Circle.</b>
+f = k*k*k - l*m;  <b>// Cubic bezier.</b>
+f = ...;  <b>// f can be any function.</b></pre></ul>
+            <li>What is the Manhattan distance (in screen space) to the nearest <code>f=0</code>?</li>
+            </ul>
+            <li>To find Manhattan distance to <code>f=0</code>, we use gradient descent as <a
+                    target="blank"
+                    href="https://www.microsoft.com/en-us/research/wp-content/uploads/2005/01/p1000-loop.pdf">proposed&nbsp;by&nbsp;Loop&nbsp;&&nbsp;Blinn</a>.
+                  However, instead of using the <i>Euclidian</i> length of the gradient, we use the
+                  <i>Manhattan</i> length.</li>
+          <ul>
+            <pre><b>// For AA, one iteration of gradient descent is sufficient.</b>
+d = f / (abs(gradF.x) + abs(gradF.y));
+coverage = saturate(.5 - d);
+          </ul>
+        </ul>
+      </td>
+      <td><img style="margin:0 10px" width="300px" src="graddesc.png"></img>
+        <div style="text-align: center;font-size:11; padding-top:5px"><a href="https://www.commonlounge.com/discussion/f5e5b0b3bba44e5daadb93044e8fa648/history"
+                       target="blank">Gradient descent</a></div></td>
+  </tr></table>
+<h1><img src="../lightbulb.png" height="50px" style="margin-right:10px"></img>Hardware Derivatives</h1>
+  <table width="100%"><tr>
+      <td><img style="margin:0 10px" width="450px" src="derivatives.png"></img>
+<div style="text-align: center;font-size:11; padding-top:5px"><a href="http://www.aclockworkberry.com/shader-derivative-functions/"
+                       target="blank">GPU derivatives</a></div>
+      </td>
+      <td width="100%">
+        <ul>
+          <li>GPUs can approximate derivatives by peeking at neighbor pixel thread registers.</li>
+          <ul>
+            <li><code>fwidth(f) = abs(dFdx(f)) + abs(dFdy(f))</code> returns the Manhattan length of the
+              gradient already!</li>
+          </ul>
+          <li>The nearest Manhattan distance to <code>f=0</code> is just <code>f/fwidth(f)</code>!!</li>
+          <ul>
+            <pre><b>// Assume ieee behavior when fwidth(f) == 0.
+// Assume saturate() carefully handles Inf and NaN.</b>
+f= ...;
+coverage = saturate(.5 - f/fwidth(f));</pre>
+          </ul>
+          <li>Chrome and Android use this technique now for rounded rectangles.</li>
+        </ul>
+      </td>
+  </tr></table>
+<h1>Demo</h1>
+<p>Scary-smooth Manhattan AA with hardware derivatives. Mouse over to zoom. Drag to tilt in perspective.</p>
+<table><tr>
+<td width="100%">
+  <canvas id="canvas" style="display:block; margin-bottom:10px; cursor:crosshair;"></canvas>
+  <input style="width:400px" type="range" min="0" max="980" value="600" id="sliderT"
+         oninput="draw()" onchange="draw()"></input>
+</td><td>
+  <input type="button" value="Squircle" onclick="applyShader(fragSquircle)"></input>
+  <input type="button" value="Round Rect" onclick="applyShader(fragRRect)"></input>
+  <input type="button" value="Circle" onclick="applyShader(fragCircle)"></input>
+  <input type="button" value="Bezier" onclick="applyShader(fragCubic)"></input>
+  <input type="button" value="Parabola" onclick="applyShader(fragParabola)"></input>
+  <textarea rows="15" cols="60" id="shaderTextarea" style="margin-top:5px;margin-bottom:5px"></textarea>
+  <input type="button" style="padding:8px 26px" value="COMPILE!" onclick="applyShader()"></input>
+</td>
+</tr></table>
+
+<div style="margin:50px auto 0 auto; display:table; width:67%">
+<img width="100%" src="squircle.jpeg">
+<div style="text-align: center; padding-top:5px">Actual footage of me at work &#9757;</div></td>
+</div>
+</div>
+
+<script>
+
+const devicePixelRatio = window.devicePixelRatio || 1;
+const canvas = document.getElementById("canvas");
+canvas.style.height = canvas.style.width = 400;
+canvas.height = canvas.width = 400 * devicePixelRatio;
+
+const sliderT = document.getElementById("sliderT");
+
+const gl = canvas.getContext("webgl2");
+gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+gl.clearColor(0,0,0,1);
+
+const vertCode =
+`#version 300 es
+
+precision highp float;
+
+uniform float yaw;
+uniform float pitch;
+
+out float x;
+out float y;
+
+void main() {
+  float u = (gl_VertexID & 1) == 0 ? -1.0 : +1.0;
+  float v = (gl_VertexID & 2) == 0 ? -1.0 : +1.0;
+
+  vec3 coord = vec3(u, vec2(cos(pitch), sin(pitch)) * v);
+  coord.xz *= mat2(cos(yaw), -sin(yaw), sin(yaw), cos(yaw));
+
+  float d = 3.0;
+  gl_Position = vec4(coord.xy*d, 0, coord.z+d);
+
+  // Shape-local coordinates.
+  x = u * 1.5;
+  y = v * 1.5;
+}`;
+
+const frag1 =
+`#version 300 es
+
+precision highp float;
+
+out vec4 fragColor;
+
+float saturate(float x) {
+  return 0.0 >= x ? 0.0 : x < 1.0 ? x : 1.0;
+}`
+
+const frag2 =
+`in float x;
+in float y;
+uniform float t;
+const float gamma = 1.0;
+const vec4 color = pow(vec4(.81,.72,1,1), vec4(gamma));
+
+void main() {`
+
+const fragSquircle = `
+  float p = -1.0 / log2(0.29289321881*t + 0.70710678118);
+  float f = pow(abs(x),p) + pow(abs(y),p) - 1.0;`
+
+const fragCircle = `
+  float f = x*x + y*y - 1.0;`
+
+const fragRRect = `
+  vec2 xy_ = max(abs(vec2(x,y)) - t, 0.0) / (1.0 - t);
+  float f = dot(xy_, xy_) - 1.0;`
+
+const fragCubic = `
+  float theta = t * 2.0*3.14;
+  float k = .75*x*cos(theta) + .9*y*sin(theta);
+  float f = k*k*k - x*y;`
+
+const fragParabola = `
+  float f = t*x*x - 1.0 - y;`
+
+const frag3 = `
+  float coverage = saturate(.5 - f/fwidth(f));
+  fragColor = mix(vec4(0,0,0,1), color, coverage);
+  fragColor = pow(fragColor, vec4(1.0/gamma));
+}`;
+
+function compileShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  const error = gl.getShaderInfoLog(shader);
+  if (error) {
+    alert(error);
+  }
+  return shader;
+}
+
+const vertShader = compileShader(gl.VERTEX_SHADER, vertCode);
+
+function linkProgram(vertShader, fragCode) {
+  const fragShader = compileShader(gl.FRAGMENT_SHADER, fragCode);
+  const program = gl.createProgram();
+  gl.attachShader(program, vertShader);
+  gl.attachShader(program, fragShader);
+  gl.linkProgram(program);
+  const error = gl.getProgramInfoLog(program);
+  if (error) {
+    alert(error);
+  }
+  gl.deleteShader(fragShader);
+  return program;
+}
+
+let yaw = 0;
+let pitch = 0;
+
+let dragging = false;
+let dragMoved = false;
+let dragX, dragY;
+
+let showMagnifier = false;
+let magX, magY;
+
+let mdown = function(e,x,y) {
+  dragging = true;
+  dragMoved = false;
+  showMagnifier = false;
+  dragX = x;
+  dragY = y;
+  draw();
+}
+
+let mmove = function(e,x,y) {
+  if (dragging) {
+    dragMoved = true;
+    let thetaMax = 15*Math.PI/32;
+    yaw = Math.max(-thetaMax, Math.min(yaw + (x - dragX) * devicePixelRatio * 5e-3, thetaMax));
+    pitch = Math.max(-thetaMax, Math.min(pitch + (dragY - y) * devicePixelRatio * 5e-3, thetaMax));
+    dragX = x;
+    dragY = y;
+    e.preventDefault();
+  } else {
+    const rect = canvas.getBoundingClientRect();
+    magX = (x - rect.left) / (rect.right - rect.left) * 2 - 1;
+    magY = (y - rect.top) / (rect.bottom - rect.top) * -2 + 1;
+    showMagnifier = true;
+  }
+  draw();
+}
+
+let mup = (e) => {
+  if (dragging && !dragMoved) {
+    yaw = 0;
+    pitch = 0;
+    sliderT.value = 600;
+    draw();
+  }
+  dragging = false;
+  showMagnifier = false;
+  draw();
+};
+
+canvas.addEventListener('mousedown', (e) => mdown(e, e.clientX, e.clientY));
+canvas.addEventListener('touchstart', (e) => mdown(e, e.touches[0].clientX, e.touches[0].clientY));
+canvas.addEventListener('mousemove', (e) => mmove(e, e.clientX, e.clientY));
+canvas.addEventListener('touchmove', (e) => mmove(e, e.touches[0].clientX, e.touches[0].clientY));
+canvas.addEventListener('mouseup', (e) => mup(e));
+canvas.addEventListener('mouseout', (e) => mup(e));
+canvas.addEventListener('touchend', (e) => mup(e));
+canvas.addEventListener('touchcancel', (e) => mup(e));
+
+const magVertCode =
+`#version 300 es
+
+precision highp float;
+
+uniform vec2 center;
+
+out float x;
+out float y;
+out vec2 texcoord;
+
+void main() {
+  float u = (gl_VertexID & 1) == 0 ? -1.0 : +1.0;
+  float v = (gl_VertexID & 2) == 0 ? -1.0 : +1.0;
+
+  gl_Position = vec4(vec2(u,v)*.67 + center, 0, 1);
+
+  x = u;
+  y = v;
+  texcoord = (vec2(center.x + x*.04, y*-.04 - center.y) + 1.0)*.5;
+}`;
+
+const magFragCode =
+`#version 300 es
+
+precision highp float;
+
+uniform sampler2D tex;
+
+in float x;
+in float y;
+in vec2 texcoord;
+
+out vec4 fragColor;
+
+vec2 saturate(vec2 v) {
+  return vec2(0.0 >= v.x ? 0.0 : v.x < 1.0 ? v.x : 1.0,
+              0.0 >= v.y ? 0.0 : v.y < 1.0 ? v.y : 1.0);
+}
+
+void main() {
+  vec2 f = x*x + y*y - vec2(1,.92);
+  vec2 c = saturate(.5 - f/fwidth(f));
+  vec4 color = vec4(texture(tex, texcoord).rgb, 1) * .96;
+  color = mix(vec4(0,.46,1,1), color, c.y);
+  fragColor = color * c.x;
+}`;
+
+var magVertShader = compileShader(gl.VERTEX_SHADER, magVertCode);
+var magProgram = linkProgram(magVertShader, magFragCode);
+var magUniformCenter = gl.getUniformLocation(magProgram, "center");
+var magUniformTex = gl.getUniformLocation(magProgram, "tex");
+
+var magTexture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, magTexture);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+function draw() {
+  window.requestAnimationFrame(function() {
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.useProgram(program);
+    gl.uniform1f(uniformYaw, yaw);
+    gl.uniform1f(uniformPitch, pitch);
+    gl.uniform1f(uniformT, sliderT.value / 1000);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    if (showMagnifier) {
+      gl.useProgram(magProgram);
+      gl.uniform2f(magUniformCenter, magX, magY);
+      gl.uniform1i(magUniformTex, 0);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+      gl.enable(gl.BLEND);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disable(gl.BLEND);
+    }
+  });
+}
+
+var program;
+var uniformYaw;
+var uniformPitch;
+var uniformT;
+
+const shaderTextarea = document.getElementById("shaderTextarea");
+
+function applyShader(fnCode) {
+  if (fnCode) {
+    shaderTextarea.value = frag2 + fnCode + frag3;
+  }
+  program = linkProgram(vertShader, frag1 + shaderTextarea.value);
+  uniformYaw = gl.getUniformLocation(program, "yaw");
+  uniformPitch = gl.getUniformLocation(program, "pitch");
+  uniformT = gl.getUniformLocation(program, "t");
+  draw();
+}
+
+applyShader(fragSquircle);
+
+</script>

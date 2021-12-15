@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<title>Christopher Dalton</title>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* {box-sizing: border-box}
+.slide {
+  border: 0;
+  display: none;
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
+  background-color: #000a13;
+}
+
+html, body, #fullheight {
+  min-height: 100% !important;
+  height: 100%;
+  color: white;
+  background-color: black;
+  font-family: Verdana, sans-serif;
+  margin:0
+}
+
+.slideshow-container {
+  position: relative;
+  margin: auto;
+}
+
+.prev, .next {
+  cursor: pointer;
+  width: auto;
+  padding: 16px;
+  font-weight: bold;
+  font-size: 18px;
+  transition: 0.6s ease;
+  border-radius: 0 3px 3px 0;
+  user-select: none;
+  background-color: rgba(64, 64, 64, 0.8);
+}
+
+.next {
+  right: 0;
+  border-radius: 3px 0 0 3px;
+}
+
+#slidenumber {
+  color: #f2f2f2;
+  font-size: 12px;
+  padding: 8px;
+}
+
+.fade {
+  -webkit-animation-name: fade;
+  -webkit-animation-duration: 3s;
+  animation-name: fade;
+  animation-duration: 3s;
+}
+
+@-webkit-keyframes fade {
+  from {opacity: 0}
+  to {opacity: 1}
+}
+
+@keyframes fade {
+  from {opacity: .4}
+  to {opacity: 1}
+}
+
+</style>
+
+</head>
+<body>
+
+<table class="slideshow-container" width="100%" height="100%">
+<tr>
+  <td><a class="prev" onclick="advanceSlide(-1)">&#10094;</a></td>
+  <td width="100%" align="center">
+      <h1 id="slidetitle">3D SOFTWARE RASTERIZERS</h1>
+      <div id="slidenumber">1&nbsp;/&nbsp;7</div>
+  <td><a class="next" onclick="advanceSlide(1)">&#10095;</a></td>
+</tr><tr>
+  <td height="100%" colspan="3">
+    <iframe id="slideIframe" class="slide fade" src="nova/nova.html"></iframe>
+  </td>
+</tr></table>
+
+</body>
+
+<script>
+const slideNames = [
+    "3D SOFTWARE RASTERIZERS",
+    "RAY TRACING",
+    "SWANKY BIRD GAMEPLAY",
+    "TESSELLATED STROKING",
+    "MANHATTAN ANTIALIASING",
+    "GRADIENT DESCENT ANTIALIASING",
+    "COVERAGE COUNTING PATH RENDERER",
+];
+const slideURLs = [
+    "nova/nova.html",
+    "flappybird/menuless.html",
+    "flappybird/index.html",
+    "stroke/stroke.html",
+    "manhattan/manhattan.html",
+    "fwidth/fwidth.html",
+    "https://docs.google.com/presentation/d/e/2PACX-1vQKMyEPdImkYTT8sTTTxwcKeTCzsgFIrPlxnDhJd6pt1Pokhcqx8-4gdBrQhdQMhrX0j7_L0fuLND_2/embed?start=false&loop=false&delayms=60000",
+];
+
+const slideIframe = document.getElementById("slideIframe");
+const slideTitle = document.getElementById("slidetitle");
+const slideNumber = document.getElementById("slidenumber");
+
+var currSlideIdx = 0;
+
+function showSlide(n) {
+  slideIframe.style.display = "none";
+  slideIframe.src = "";
+  slideTitle.innerHTML = slideNames[n];
+  slideNumber.innerHTML = (n+1) + "&nbsp;/&nbsp;" + slideNames.length;
+  currSlideIdx = n;
+  window.requestAnimationFrame(function() {
+    slideIframe.style.display = "block";
+    window.requestAnimationFrame(function() {
+      slideIframe.src = slideURLs[n];
+    });
+  });
+}
+
+function advanceSlide(n) {
+  if (n < 0) {
+    n = slideNames.length - (-n % slideNames.length);
+  }
+  showSlide((currSlideIdx + n) % slideNames.length);
+}
+
+showSlide(0);
+
+window.onkeydown = function(e) {
+  if (e.keyCode >= '1'.charCodeAt(0) && e.keyCode <= '9'.charCodeAt(0)) {
+    const n = e.keyCode - '1'.charCodeAt(0);
+    if (n < slideNames.length) {
+      showSlide(n);
+      return;
+    }
+  }
+  slideIframe.contentDocument.dispatchEvent(new KeyboardEvent('keydown', {key: e.key}));
+};
+
+</script>
+
+</html>

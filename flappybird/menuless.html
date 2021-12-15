@@ -1,0 +1,135 @@
+<link rel='stylesheet' type='text/css' href='../slide.css'></link>
+
+<div class="main">
+  <table width="100%"><tr>
+    <td valign="middle">
+      <h1>Ray Traced ... Flappy Bird?</h1>
+      <p>Deployed to the App Store and Google Play.</p>
+      <ul>
+        <li>Water reflection & refraction modeled by Snell's law and Fresnel's equations.</li>
+        <li>Pipes described by 3D cylinder equations.</li>
+        <li>Bird based on a stock 3D model with added custom 3D animations.</li>
+        <li><b>Coming soon:</b> <i>Flappy Bird VR!</i></li>
+      </ul>
+      <p>Drag the canvas to pivot the camera. "Space" to go up. "X" to go down.</p>
+    </td><td valign="top" align="right">
+      <h1><img src="flappybird.jpg"></img></h1>
+    </td>
+  </tr></table>
+<div style="display:table; margin:0 auto">
+<canvas id="canvas"></canvas>
+<div>
+<input type="button" value="Lake" onclick="onPlatformLoadNewSkybox(0)"></input>
+<input type="button" value="Cityscape" onclick="onPlatformLoadNewSkybox(1)"></input>
+<input type="button" value="Castle" onclick="onPlatformLoadNewSkybox(2)"></input>
+<input type="button" value="Moon" onclick="onPlatformLoadNewSkybox(3)"></input>
+</div>
+</div>
+<h1>Water Implementation Details</h1>
+<p>The water surface height is described by 32 random, stacked, planar <code>sin<sup>2</sup></code> waves.</p>
+<ul>
+  <li>To feel like real water, each wave's speed must be a function of its wavelength and Earth's gravity.</li>
+  <li>The surface height function is readily differentiable at each pixel to find the surface normal.
+  <ul><li><code>d/dt(D*sin<sup>2</sup>(t)) == 2*D*sin(t)*cos(t)</code></li></ul></li>
+  <li>Snell's law tells us the direction of refraction.</li>
+  <li>Fresnel's equations tell us how to mix the reflected and refracted light.</li>
+</ul>
+<p>Some 2015 era mobile GPUs struggled with 64 trig functions per pixel
+(<code>2*D*sin(t)*cos(t)</code> x 32 waves).</p>
+<ul>
+  <li>Solved by pre-rendering water surface normals into an offscreen 256x256 texture every frame.</li>
+  <li>Made the texture tileable by snapping wavelengths to even divisors of 256 in x and y both.</li>
+</ul>
+</div>
+
+<script src="swankybird.js"></script>
+<script src="platform.js"></script>
+<script>
+
+const devicePixelRatio = window.devicePixelRatio || 1;
+canvas = document.getElementById("canvas");
+
+var displayHeight = Math.min(window.innerHeight, window.innerWidth) * .9;
+canvas.style.height = displayHeight;
+canvas.style.width = displayHeight * 1.25;
+canvas.height = displayHeight * devicePixelRatio;
+canvas.width =  displayHeight * devicePixelRatio * 1.25;
+
+Module['onRuntimeInitialized'] = function() {
+  GL.init();
+  GL.makeContextCurrent(GL.createContext(canvas, {}));
+  gl = GL.currentContext.GLctx;
+
+  onPlatformInit(1);
+  onPlatformSurfaceChanged(canvas.width, canvas.height);
+
+  let dz = 0;
+  window.onkeydown = function(e) {
+    switch (e.keyCode) {
+      case ' '.charCodeAt(0): dz = +1; break;
+      case 'X'.charCodeAt(0): dz = -1; break;
+      default: return true;
+    }
+    e.preventDefault();
+    return false;
+  }
+  window.onkeyup = function(e) {
+    switch (e.keyCode) {
+      case ' '.charCodeAt(0):
+      case 'X'.charCodeAt(0): dz = 0; break;
+    }
+  }
+
+  let dragging = false;
+  let dragX, dragY;
+  let mdown = function(e,x,y) {
+    dragging = true;
+    dragX = x;
+    dragY = y;
+  }
+
+  let mmove = function(e,x,y) {
+    if (dragging) {
+      onPlatformDragCamera((x - dragX) * devicePixelRatio * 2.5e-3,
+                           (y - dragY) * devicePixelRatio * -2.5e-3);
+      dragX = x;
+      dragY = y;
+      e.preventDefault();
+    }
+  }
+
+  let mup = (e) => {
+    dragging = false;
+  };
+
+  canvas.addEventListener('mousedown', (e) => mdown(e, e.clientX, e.clientY));
+  canvas.addEventListener('touchstart', (e) => mdown(e, e.touches[0].clientX, e.touches[0].clientY));
+  canvas.addEventListener('mousemove', (e) => mmove(e, e.clientX, e.clientY));
+  canvas.addEventListener('touchmove', (e) => mmove(e, e.touches[0].clientX, e.touches[0].clientY));
+  canvas.addEventListener('mouseup', (e) => mup(e));
+  canvas.addEventListener('mouseout', (e) => mup(e));
+  canvas.addEventListener('touchend', (e) => mup(e));
+  canvas.addEventListener('touchcancel', (e) => mup(e));
+
+  onPlatformEnterMenu();
+
+  (function() {
+      try {
+          if (dz) {
+              onPlatformRaiseCamera(dz * .1);
+          }
+          onPlatformDrawFrame();
+      } catch (err) {
+          if (!err.msg) throw err;
+          if (err.msg === "skybox loader not finished") {
+              err.loader.finishedCallbacks.push(arguments.callee);
+              return;
+          }
+          alert('FATAL: ' + err.msg);
+          abort();
+      }
+
+      requestAnimationFrame(arguments.callee);
+  })();
+}
+</script>

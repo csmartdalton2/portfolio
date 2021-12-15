@@ -1,0 +1,249 @@
+<link rel='stylesheet' type='text/css' href='../slide.css'></link>
+
+<div class="main">
+
+<h1>Stroking is <u><i><b>HARD!</b></i></u></h1>
+<table><tr>
+    <td align="center"><img src="offsetcurve.png"></img>
+      <div style="font-size:11; padding-top:5px">Credit:&nbsp;<a href="https://pomax.github.io/bezierinfo/#offsetting"
+                       target="blank">https://pomax.github.io/bezierinfo/#offsetting</a></span></td>
+<td style="padding-left:20px">
+  <p>Stroking is equivalent to filling the region between two offset curves.</p>
+  <p>The offset curve of a cubic bezier is immensely complex. In fact, <a
+    href="https://pomax.github.io/bezierinfo/#offsetting" target="blank">it's&nbsp;non-polynomial</a>! Skia didn't have a
+  good solution. The best it could do was to recursively chop at max curvature and piece together an
+  approximating path to fill.</p>
+  <ul>
+    <li>Finding max curvature required solving a cubic equation before every chop.</li>
+    <li>The approximation was resolution-dependent -- Skia had to make a new one every time the
+      matrix changed.</li>
+    <li>Drawing the stroke directly is less expensive than filling an approximating path.</li>
+  </ul>
+</tr></table>
+
+<h1><img src="../lightbulb.png" height="50px" style="margin-right:10px"></img>Polar & Parametric
+  Stroke Tessellation</h1>
+  <p>I built on Mark Kilgard's <a target="blank"
+    href="https://developer.nvidia.com/siggraph/2020/video/sig03-vid">Polar Stroking</a> work to develop
+  a GPU algorithm that tessellates any offset curve within rigorous smoothness constraints. It works
+  by drawing strokes as tessellated triangle strips, composed of sorted <i>parametric</i>
+  and <i>polar</i> edges.</p>
+  <ul>
+    <li><b style="color:cyan">Parametric</b> edges (drawn as <b style="color:cyan">cyan</b> below) are placed at even steps in parametric space.
+    <ul><li><a
+          href="https://github.com/google/skia/blob/3317b1b23eea691fa8633a52089c7a765a6f2240/src/gpu/tessellate/WangsFormula.h#L19"
+          target="blank">Wang's formula</a> tells us how many parametric edges to draw.</li></ul>
+    </li>
+    <li><b style="color:red">Polar</b> edges (drawn as <b style="color:red">red</b> below) are placed at even steps in tangent angle.
+    <ul><li>The number of polar edges we draw is directly proportional to the curve's total rotation.</li></ul>
+    </li>
+    <li>The tessellation shader <a target="blank"
+                                   href="https://github.com/google/skia/blob/461c0eb9e75d6fbf9fc93bbb751f700eb43ef87d/src/gpu/tessellate/shaders/GrStrokeTessellationShader.cpp#L190">merge-sorts</a>
+      both sets of edges together then builds a triangle strip.
+      <ul>
+        <li>The sort is only virtual; it operates entirely in flops without accessing memory.</li>
+        <li>The sort has a good balance of "simple" flops that hide the latency of "special
+          functions" like cos().</li>
+      </ul>
+    </li>
+  </ul>
+<p>Drag the blue control points below to interact with the tessellation.</p>
+<ul>
+<canvas id="cubicstroke" width="800" height="500"></canvas>
+<div style="padding-top:15px">
+<input type="checkbox" id="Wireframe" checked="true" onclick="ApplyCheckboxes()">Wireframe</input>
+<input type="checkbox" id="Polar" checked="true" onclick="ApplyCheckboxes()">Polar edges</input>
+<input type="checkbox" id="Parametric" checked="true" onclick="ApplyCheckboxes()">Parametric edges</input>
+</div>
+</ul>
+
+<h1>Impact</h1>
+  <ul>
+    <li>Skia's first and only stroker powered fully by the GPU.</li>
+    <li><b><u>25x</u></b> faster than Skia's prior stroking implementations on Apple M1.</li>
+    <li>Improved Chrome's
+      <a href="https://browserbench.org/MotionMark1.2/developer.html" target="blank">MotionMark</a>
+      Paths score from <u><b>2,100</b></u> to <u><b>23,000</b></u> on Apple M1.
+      <ul><li> The GPU can score higher once upstack bottlenecks are addressed.</li></ul></li>
+    <li>More than <u><b>doubled</b></u> Chrome's overall MotionMark score and surpassed Safari.
+      <ul><li> Safari's prior dominance on this benchmark was being widely quoted in the press.</li></ul></li>
+    <li>Google tried to file a patent, but was unable because of complications with open source.</li>
+    <li>Skia GPU team is now entirely rewriting our backend around my tessellation algorithms.</li>
+  </ul>
+
+<h1>SVG Joins</h1>
+<p>Joins are crafted as a special case of cubic cusp. Lines and quadratics
+are also converted to cubics.</p>
+<p>Everything is a cubic -- a single call to <code>glDrawArrays()</code> will stroke an entire path.</p>
+
+<ul>
+<canvas id="tristroke" width="800" height="500"></canvas>
+<div style="padding-top:15px">
+<input type="checkbox" id="TriWireframe" checked="true" onclick="ApplyCheckboxes()">Wireframe</input>
+<input type="radio" id="Miter" name="Join" checked="true" onclick="Draw()">Miter</input>
+<input type="radio" id="Round" name="Join" onclick="Draw()">Round</input>
+<input type="radio" id="Bevel" name="Join" onclick="Draw()">Bevel</input>
+</div>
+</ul>
+
+</div>
+
+<script type="text/javascript" src="canvaskit.js"></script>
+
+<script type="text/javascript" charset="utf-8">
+
+  var CanvasKit = null;
+  var cubicCanvas = null;
+  var triCanvas = null;
+
+  const ckLoaded = CanvasKitInit({locateFile: (file) => file});
+
+  function StrokeCanvas(canvasId, pts) {
+    this.pts = pts;
+    let canvas = document.getElementById(canvasId);
+    this.surface = CanvasKit.MakeWebGLCanvasSurface(canvas, null, {antialias:true});
+    if (!this.surface) {
+      console.error('Could not make surface');
+      return;
+    }
+    let dragging = false;
+    let dragIdx = -1;
+    let dragX, dragY;
+    let mdown = (e,x,y) => {
+      const r = canvas.getBoundingClientRect();
+      x = (x - r.left) * canvas.width / r.width;
+      y = (y - r.top) * canvas.height / r.height;
+      dragIdx = -1;
+      for (let i = 0; i < pts.length; i += 2) {
+        if (Math.abs(x - pts[i]) < 50 && 
+            Math.abs(y - pts[i+1]) < 50) {
+          dragIdx = i;
+          break;
+        }
+      }
+      dragging = true;
+      dragX = x;
+      dragY = y;
+      e.preventDefault();
+    };
+    canvas.addEventListener('mousedown', (e) => mdown(e, e.clientX, e.clientY));
+    canvas.addEventListener('touchstart', (e) => mdown(e, e.touches[0].clientX, e.touches[0].clientY));
+    let mmove = (e,x,y) => {
+      const r = canvas.getBoundingClientRect();
+      x = (x - r.left) * canvas.width / r.width;
+      y = (y - r.top) * canvas.height / r.height;
+      if (dragging) {
+        if (dragIdx >= 0) {
+          pts[dragIdx] += x - dragX;
+          pts[dragIdx+1] += y - dragY;
+        } else for (let i = 0; i < pts.length; i += 2) {
+          pts[i] += x - dragX;
+          pts[i+1] += y - dragY;
+        }
+        dragX = x;
+        dragY = y;
+        e.preventDefault();
+        Draw();
+      }
+    };
+    canvas.addEventListener('mousemove', (e) => mmove(e, e.clientX, e.clientY));
+    canvas.addEventListener('touchmove', (e) => mmove(e, e.touches[0].clientX, e.touches[0].clientY));
+    let mup = (e) => {
+      dragging = false;
+    };
+    canvas.addEventListener('mouseup', (e) => mup(e));
+    canvas.addEventListener('mouseout', (e) => mup(e));
+    canvas.addEventListener('touchend', (e) => mup(e));
+    canvas.addEventListener('touchcancel', (e) => mup(e));
+
+    this.drawPts = function(canvas) {
+      const pointPaint = new CanvasKit.Paint();
+      pointPaint.setAntiAlias(true);
+      pointPaint.setColor(CanvasKit.Color(0, 0, 255, 1.0));
+      for (let i = 0; i < pts.length; i += 2) {
+        canvas.drawOval(CanvasKit.XYWHRect(pts[i] - 4, pts[i+1] - 4, 8, 8), pointPaint);
+      }
+      pointPaint.delete();
+    };
+  }
+
+  // Examples which only require canvaskit
+  ckLoaded.then((CK) => {
+    CanvasKit = CK;
+    cubicCanvas = new StrokeCanvas('cubicstroke', [336, 465, 76, 21, 27, 417, 630, 146]);
+    triCanvas = new StrokeCanvas('tristroke', [200, 400, 200, 100, 600, 400]);
+    Draw();
+  });
+
+  function Draw() {
+    const MAGIC_WIREFRAME_COLOR = CanvasKit.Color(0, 0, 0, .125);
+    const CYAN = CanvasKit.Color(0, 255, 255, 1.0);
+
+    cubicCanvas.surface.requestAnimationFrame(function(canvas) {
+      const paint = new CanvasKit.Paint();
+      paint.setStrokeWidth(40);
+      paint.setAntiAlias(false);
+      paint.setColor(document.getElementById("Wireframe").checked ? MAGIC_WIREFRAME_COLOR : CYAN);
+      paint.setStyle(CanvasKit.PaintStyle.Stroke);
+
+      let pts = cubicCanvas.pts;
+
+      const path = new CanvasKit.Path();
+      path.moveTo(pts[0], pts[1]);
+      path.cubicTo(pts[2], pts[3], pts[4], pts[5], pts[6], pts[7]);
+      canvas.drawPath(path, paint);
+
+      path.delete();
+      paint.delete();
+
+      cubicCanvas.drawPts(canvas);
+    });
+
+    triCanvas.surface.requestAnimationFrame(function(canvas) {
+      const paint = new CanvasKit.Paint();
+      paint.setStrokeWidth(40);
+      paint.setAntiAlias(false);
+      if (document.getElementById("Miter").checked) {
+        paint.setStrokeJoin(CanvasKit.StrokeJoin.Miter);
+      } else if (document.getElementById("Round").checked) {
+        paint.setStrokeJoin(CanvasKit.StrokeJoin.Round);
+      } else if (document.getElementById("Bevel").checked) {
+        paint.setStrokeJoin(CanvasKit.StrokeJoin.Bevel);
+      }
+      paint.setColor(document.getElementById("TriWireframe").checked ? MAGIC_WIREFRAME_COLOR : CYAN);
+      paint.setStyle(CanvasKit.PaintStyle.Stroke);
+
+      let pts = triCanvas.pts;
+
+      const path = new CanvasKit.Path();
+      path.moveTo(pts[0], pts[1]);
+      path.lineTo(pts[2], pts[3]);
+      path.lineTo(pts[4], pts[5]);
+      path.close();
+      canvas.drawPath(path, paint);
+
+      path.delete();
+      paint.delete();
+
+      triCanvas.drawPts(canvas);
+    });
+  }
+
+  var wireframe=true, parametric=true, polar=true;
+
+  function ApplyCheckboxes() {
+    if (!CanvasKit) {
+      return;
+    }
+    if (polar != document.getElementById("Polar").checked) {
+      polar = !polar;
+      CanvasKit._SetStrokeRadialEdges(polar);
+    }
+    if (parametric != document.getElementById("Parametric").checked) {
+      parametric = !parametric;
+      CanvasKit._SetStrokeParametricEdges(parametric);
+    }
+    Draw();
+  }
+
+</script>
